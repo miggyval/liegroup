@@ -182,10 +182,6 @@ def product_groups_factory(*groups):
         AlgebraTypes: list[type] = [g for _, g in type_pairs]
         
         @classmethod
-        def get_tuple(cls, groups, func, item):
-            tuple(g.identity() for g in groups)
-        
-        @classmethod
         def identity(cls) -> tuple:
             """Return the identity element of the product group."""
             return tuple(g.identity() for g in groups)

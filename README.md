@@ -1,4 +1,4 @@
-# LieGroupPy
+# LieGroup
 
 A lightweight and modular Python framework for Lie groups and Lie algebras, designed for robotics, control theory, estimation, and optimization research.
 

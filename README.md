@@ -20,7 +20,7 @@ Full test suite using **pytest**, checking group axioms, inverses, Lie algebra c
 
 ---
 
-## ✨ Features
+## Features
 
 - Abstract base class `LieGroup` with type generics
 - Group operations: `compose`, `inverse`, `identity`
@@ -34,17 +34,17 @@ Full test suite using **pytest**, checking group axioms, inverses, Lie algebra c
 
 ---
 
-## 📦 Installation
+## Installation
 
 ```bash
-git clone https://github.com//LieGroupPy.git
-cd LieGroupPy
+git clone https://github.com/miggyval/liegroups.git
+cd liegroup
 pip install -r requirements.txt
 ```
 
 ---
 
-## 🧩 Usage Example
+## Usage Example
 
 ```python
 from liegroup import SE2, SO3
@@ -70,7 +70,7 @@ print(f"Distance between X and Y: {d}")
 
 ---
 
-## 🧪 Testing
+## Testing
 
 All operations are tested over random samples using `pytest`.
 
@@ -88,7 +88,7 @@ Tests include:
 
 ---
 
-## 🎯 EKF Example
+## EKF Example
 
 An Extended Kalman Filter is provided for any Lie group:
 
@@ -127,7 +127,7 @@ Trajectory plotting included for 2D, 3D, and rotational groups.
 
 ---
 
-## ✨ Future Plans
+## Future Plans
 
 - Add support for **Torus groups** (S¹ × S¹)
 - Add **SE(n)** and **SO(n)** for arbitrary dimensions
@@ -136,10 +136,8 @@ Trajectory plotting included for 2D, 3D, and rotational groups.
 
 ---
 
-## 📜 License
+## License
 
 MIT License — free for academic, research, and commercial use.
 
 ---
-
-# 🚀 Happy Hacking on Lie Groups! 🎯

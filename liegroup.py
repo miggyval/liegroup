@@ -2,13 +2,30 @@ from abc import ABC, abstractmethod
 import numpy as np
 import matplotlib.pyplot as plt
 import quaternion
-
-from typing import Generic, TypeVar
+import scipy
+from typing import Generic, TypeVar, get_origin, get_args, Tuple
 
 g = TypeVar('g')
 G = TypeVar('G')
 
 EPS = 1e-6
+
+
+def extract_datatypes(group_cls: type) -> tuple[type, type]:
+    """
+    Given a subclass of LieGroup[G, g], return (G, g).
+    Falls back to group_cls.GroupElement and np.ndarray if it can't find them.
+    """
+    # look for a base of the form LieGroup[SomeType, OtherType]
+    for base in getattr(group_cls, "__orig_bases__", ()):
+        origin = get_origin(base)
+        if origin is LieGroup:
+            args = get_args(base)
+            if len(args) == 2:
+                return args  # this is (G_type, g_type)
+    # fallback: use the GroupElement alias (or np.ndarray) and default g to np.ndarray
+    G_type = getattr(group_cls, "GroupElement", np.ndarray)
+    return (G_type, np.ndarray)
 
 class LieGroup(ABC, Generic[G, g]):
     N: int
@@ -64,7 +81,6 @@ class LieGroup(ABC, Generic[G, g]):
     @abstractmethod
     def adjoint(cls, X: G) -> np.ndarray:
         pass
-    
     
     @classmethod
     @abstractmethod
@@ -122,8 +138,132 @@ class LieGroup(ABC, Generic[G, g]):
         return X
     
     @classmethod
-    def distance(cls, X1: G, X2: G):
+    def distance(cls, X1: G, X2: G) -> float:
         return np.linalg.norm(cls.ominus(X2, X1))
+
+    @classmethod
+    def isclose_G(cls, X1: G, X2: G, atol=1e-5):
+        return cls.distance(X1, X2) < atol
+    
+    @classmethod
+    def isclose_g(cls, v1: g, v2: g, atol=1e-5):
+        return np.linalg.norm(cls.vee(v1) - cls.vee(v2)) < atol
+    
+# Factory function for product Lie groups
+def product_groups_factory(*groups):
+    """
+    Factory function that creates a Lie group class for the Cartesian product
+    of multiple Lie groups provided as arguments (e.g. G1 x G2 x G3 ...).
+    
+    Arguments:
+    *groups -- Any number of Lie group classes.
+    
+    Returns:
+    A new class representing the Cartesian product of the input groups.
+    """
+    
+    # Extract types for each group (G_i, g_i) using the extract_datatypes helper
+    type_pairs = [extract_datatypes(Gi) for Gi in groups]
+    
+    # Create a custom class name based on the names of the groups
+    class_name = "x".join(Gi.__name__ for Gi in groups)
+    group_dims = [Gi.N for Gi in groups]
+    cumdims = np.cumsum([0] + group_dims)
+    
+    # Define the ProductGroup class that represents the Cartesian product
+    class ProductGroup(LieGroup):
+        """Lie group representing the Cartesian product of the input groups."""
+        
+        # Total dimension: sum of the dimensions of each group
+        N = sum(Gi.N for Gi in groups)
+        
+        # Store the extracted types for each group's elements and algebra
+        ElementTypes: list[type] = [G for G, _ in type_pairs]
+        AlgebraTypes: list[type] = [g for _, g in type_pairs]
+        
+        @classmethod
+        def get_tuple(cls, groups, func, item):
+            tuple(g.identity() for g in groups)
+        
+        @classmethod
+        def identity(cls) -> tuple:
+            """Return the identity element of the product group."""
+            return tuple(g.identity() for g in groups)
+        
+        @classmethod
+        def compose(cls, X1: tuple, X2: tuple) -> tuple:
+            """Compose two elements (X1, X2, ..., Xn) of the product group."""
+            return tuple(g.compose(x1, x2) for g, (x1, x2) in zip(groups, zip(X1, X2)))
+        
+        @classmethod
+        def inverse(cls, X: tuple) -> tuple:
+            """Inverse of an element (X1, X2, ..., Xn) in the product group."""
+            return tuple(g.inverse(x) for g, x in zip(groups, X))
+        
+        @classmethod
+        def exp(cls, v: tuple) -> tuple:
+            """Exponential map for the product group: apply exp to each component."""
+            return tuple(g.exp(vi) for g, vi in zip(groups, v))
+        
+        @classmethod
+        def log(cls, X: tuple) -> tuple:
+            """Logarithmic map for the product group: apply log to each component."""
+            return tuple(g.log(x) for g, x in zip(groups, X))
+        
+        @classmethod
+        def hat(cls, v: np.ndarray) -> tuple:
+            """Apply hat map to each component of v."""
+            parts = [v[cumdims[i]:cumdims[i+1]] for i in range(len(groups))]
+            return tuple(g.hat(part) for g, part in zip(groups, parts))
+        
+        @classmethod
+        def vee(cls, v: tuple) -> np.ndarray:
+            """Apply vee map to each component of v."""
+            parts = [g.vee(vi) for g, vi in zip(groups, v)]
+            return np.concatenate(parts)
+        
+        @classmethod
+        def adjoint(cls, X: tuple) -> np.ndarray:
+            """Adjoint map for the product group: apply adjoint to each component."""
+            blocks = [g.adjoint(x) for g, x in zip(groups, X)]
+            return scipy.linalg.block_diag(*blocks)
+        
+
+        @classmethod
+        def left_jacobian(cls, v: np.ndarray) -> np.ndarray:
+            parts = [v[cumdims[i]:cumdims[i+1]] for i in range(len(groups))]
+            blocks = [g.left_jacobian(v) for g, v in zip(groups, parts)]
+            return scipy.linalg.block_diag(*blocks)
+            
+
+        @classmethod
+        def left_jacobian_inverse(cls, v: np.ndarray) -> np.ndarray:
+            parts = [v[cumdims[i]:cumdims[i+1]] for i in range(len(groups))]
+            blocks = [g.left_jacobian_inverse(v) for g, v in zip(groups, parts)]
+            return scipy.linalg.block_diag(*blocks)
+        
+        @classmethod
+        def lie_bracket(cls, v: np.ndarray, w: np.ndarray) -> np.ndarray:
+                parts_v = [v[cumdims[i]:cumdims[i+1]] for i in range(len(groups))]
+                parts_w = [w[cumdims[i]:cumdims[i+1]] for i in range(len(groups))]
+                parts_bracket = [g.lie_bracket(vi, wi) for g, vi, wi in zip(groups, parts_v, parts_w)]
+                return np.concatenate(parts_bracket)
+        
+        @classmethod
+        def randu(cls):
+            """Uniform random sampling for the product Lie group."""
+            # Generate random elements by calling randu for each group in the product
+            return tuple(g.randu() for g in groups)
+        
+        @classmethod
+        def normalize(cls, X: tuple) -> tuple:
+            """Normalize each element of the product group separately."""
+            return tuple(g.normalize(x) for g, x in zip(groups, X))
+
+
+    # Set the custom name for the class
+    ProductGroup.__name__ = class_name
+    return ProductGroup
 
 
 
@@ -237,6 +377,7 @@ class RplusMul(LieGroup[np.float64, np.float64]):
     @classmethod
     def normalize(cls, x: np.float64) -> np.float64:
         return x
+    
 
 
     
@@ -366,14 +507,10 @@ class UnitQuat(LieGroup[np.quaternion, np.quaternion]):
     @classmethod
     def left_jacobian_inverse(cls, v: np.ndarray) -> np.ndarray:
         theta = np.linalg.norm(v)
-        v_mat = np.array([
-            [0, -v[2], v[1]],
-            [v[2], 0, -v[0]],
-            [-v[1], v[0], 0]
-        ])
+        vx = SO3.hat(v)
         if theta < EPS:
-            return np.eye(3) - 0.5 * v_mat + (1.0 / 12.0) * (v_mat @ v_mat)
-        return np.eye(3) - 0.5 * v_mat + (1.0 / (theta ** 2) - (1 + np.cos(theta)) / (2 * theta * np.sin(theta))) * (v_mat @ v_mat)
+            return np.eye(3) - 0.5 * vx + (1.0 / 12.0) * (vx @ vx)
+        return np.eye(3) - 0.5 * vx + (1.0 / (theta ** 2) - (1 + np.cos(theta)) / (2 * theta * np.sin(theta))) * (vx @ vx)
 
     @classmethod
     def lie_bracket(cls, v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
@@ -692,6 +829,7 @@ class SE3(LieGroup[np.ndarray, np.ndarray]):
             wx = (theta / (2 * np.sin(theta))) * (R - R.T)
             w = np.array([wx[2, 1], wx[0, 2], wx[1, 0]])
             w_norm_sq = np.dot(w, w)
+            print(w_norm_sq)
             A = np.sin(theta) / theta
             B = (1 - np.cos(theta)) / (theta**2)
             V_inv = (
@@ -885,12 +1023,15 @@ class SO2(LieGroup[np.ndarray, np.ndarray]):
     def exp(cls, wx: np.ndarray) -> np.ndarray:
         w = cls.vee(wx)
         theta = w[0]
-        return np.cos(theta) * cls.identity() + np.sin(theta) * cls.hat(np.array([1]))
+        R = np.array([
+            [np.cos(theta), -np.sin(theta)],
+            [np.sin(theta), np.cos(theta)]
+        ])
+        return R
 
     @classmethod
     def adjoint(cls, R: np.ndarray) -> np.ndarray:
         return np.eye(1)
-    
     
     @classmethod
     def left_jacobian(cls, w: np.ndarray) -> np.ndarray:

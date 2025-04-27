@@ -37,7 +37,7 @@ Full test suite using **pytest**, checking group axioms, inverses, Lie algebra c
 ## Installation
 
 ```bash
-git clone https://github.com/miggyval/liegroups.git
+git clone https://github.com/miggyval/liegroup.git
 cd liegroup
 pip install -r requirements.txt
 ```

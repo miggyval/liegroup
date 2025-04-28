@@ -1,20 +1,21 @@
 from abc import ABC, abstractmethod
 import numpy as np
-import matplotlib.pyplot as plt
 import quaternion
-import scipy
-from typing import Generic, TypeVar, get_origin, get_args, Tuple
+from scipy.linalg import block_diag
+from typing import Generic, TypeVar, get_origin, get_args, Optional, Type, Tuple, Any
+from numpy.typing import NDArray
 
 g = TypeVar('g')
 G = TypeVar('G')
+F = NDArray[np.floating[Any]]
+
 
 EPS = 1e-6
-
 
 def extract_datatypes(group_cls: type) -> tuple[type, type]:
     """
     Given a subclass of LieGroup[G, g], return (G, g).
-    Falls back to group_cls.GroupElement and np.ndarray if it can't find them.
+    Falls back to group_cls.GroupElement and F if it can't find them.
     """
     # look for a base of the form LieGroup[SomeType, OtherType]
     for base in getattr(group_cls, "__orig_bases__", ()):
@@ -23,23 +24,23 @@ def extract_datatypes(group_cls: type) -> tuple[type, type]:
             args = get_args(base)
             if len(args) == 2:
                 return args  # this is (G_type, g_type)
-    # fallback: use the GroupElement alias (or np.ndarray) and default g to np.ndarray
-    G_type = getattr(group_cls, "GroupElement", np.ndarray)
-    return (G_type, np.ndarray)
+    # fallback: use the GroupElement alias (or F) and default g to F
+    G_type = getattr(group_cls, "GroupElement", F)
+    return (G_type, F)
 
 class LieGroup(ABC, Generic[G, g]):
     N: int
-    GroupElement: type = np.ndarray
     
+    GroupElement: type = F
     
     @classmethod
-    def _check_hat_input(cls, v: np.ndarray) -> None:
-        assert isinstance(v, np.ndarray), f"hat input must be np.ndarray, got {type(v)}"
+    def _check_hat_input(cls, v: F) -> None:
+        assert isinstance(v, np.ndarray), f"hat input must be F, got {type(v)}"
         assert v.shape == (cls.N,), f"hat expects shape ({cls.N},), got {v.shape}"
 
     @classmethod
-    def _check_vee_output(cls, out: np.ndarray) -> None:
-        assert isinstance(out, np.ndarray), f"vee output must be np.ndarray, got {type(out)}"
+    def _check_vee_output(cls, out: F) -> None:
+        assert isinstance(out, np.ndarray), f"vee output must be F, got {type(out)}"
         assert out.shape == (cls.N,), f"vee must return shape ({cls.N},), got {out.shape}"
     
     @classmethod
@@ -69,57 +70,62 @@ class LieGroup(ABC, Generic[G, g]):
 
     @classmethod
     @abstractmethod
-    def hat(cls, vx: np.ndarray) -> g:
+    def hat(cls, vx: F) -> g:
         pass
 
     @classmethod
     @abstractmethod
-    def vee(cls, v: g) -> np.ndarray:
+    def vee(cls, v: g) -> F:
         pass
 
     @classmethod
     @abstractmethod
-    def adjoint(cls, X: G) -> np.ndarray:
+    def adjoint(cls, X: G) -> F:
         pass
     
     @classmethod
     @abstractmethod
-    def left_jacobian(cls, v: np.ndarray) -> np.ndarray:
+    def left_jacobian(cls, v: F) -> F:
         pass
 
     @classmethod
     @abstractmethod
-    def left_jacobian_inverse(cls, v: np.ndarray) -> np.ndarray:
+    def left_jacobian_inverse(cls, v: F) -> F:
         pass
     
     @classmethod
     @abstractmethod
-    def lie_bracket(cls, v: np.ndarray, w: np.ndarray) -> np.ndarray:
+    def lie_bracket(cls, v: F, w: F) -> F:
+        pass
+    
+    @classmethod
+    @abstractmethod
+    def randu(cls) -> G:
         pass
 
     @classmethod
-    def Log(cls, X: G) -> np.ndarray:
+    def Log(cls, X: G) -> F:
         return cls.vee(cls.log(X))
 
     @classmethod
-    def Exp(cls, v: np.ndarray) -> G:
+    def Exp(cls, v: F) -> G:
         return cls.exp(cls.hat(v))
 
     @classmethod
-    def oplus(cls, X: G, v: np.ndarray) -> G:
+    def oplus(cls, X: G, v: F) -> G:
         return cls.compose(X, cls.Exp(v))
 
     @classmethod
-    def ominus(cls, X: G, Y: G) -> np.ndarray:
+    def ominus(cls, X: G, Y: G) -> F:
         return cls.Log(cls.compose(cls.inverse(X), Y))
     
     @classmethod
-    def randn_G(cls, *, scale: float=1.0, cov: np.ndarray=None) -> G:
+    def randn_G(cls, *, scale: float=1.0, cov: Optional[F]=None) -> G:
         vx = cls.randn_g(scale=scale, cov=cov)
         return cls.normalize(cls.exp(vx))
     
     @classmethod
-    def randn_g(cls, *, scale: float=1.0, cov: np.ndarray=None) -> g:        
+    def randn_g(cls, *, scale: float=1.0, cov: Optional[F]=None) -> g:        
         if cov is not None:
             assert isinstance(cov, np.ndarray) and np.issubdtype(cov.dtype, np.floating)
             assert cov.shape == (cls.N, cls.N)
@@ -128,9 +134,6 @@ class LieGroup(ABC, Generic[G, g]):
             v = np.random.randn(cls.N) * scale
         return cls.hat(v)
     
-    @classmethod
-    def randu(cls):
-        raise NotImplementedError(f"{cls.__name__} must override random_uniform() if it supports uniform sampling.")
     
     @classmethod
     def normalize(cls, X: G) -> G:
@@ -138,19 +141,19 @@ class LieGroup(ABC, Generic[G, g]):
         return X
     
     @classmethod
-    def distance(cls, X1: G, X2: G) -> float:
+    def distance(cls, X1: G, X2: G) -> np.floating[Any]:
         return np.linalg.norm(cls.ominus(X2, X1))
 
     @classmethod
-    def isclose_G(cls, X1: G, X2: G, atol=1e-5):
+    def isclose_G(cls, X1: G, X2: G, atol: float=1e-5) -> np.bool:
         return cls.distance(X1, X2) < atol
     
     @classmethod
-    def isclose_g(cls, v1: g, v2: g, atol=1e-5):
+    def isclose_g(cls, v1: g, v2: g, atol: float=1e-5) -> np.bool:
         return np.linalg.norm(cls.vee(v1) - cls.vee(v2)) < atol
     
 # Factory function for product Lie groups
-def product_groups_factory(*groups):
+def product_groups_factory(*groups: Type[LieGroup[Any, Any]]) -> Type[LieGroup[Tuple[G], Tuple[g]]]:
     """
     Factory function that creates a Lie group class for the Cartesian product
     of multiple Lie groups provided as arguments (e.g. G1 x G2 x G3 ...).
@@ -171,7 +174,7 @@ def product_groups_factory(*groups):
     cumdims = np.cumsum([0] + group_dims)
     
     # Define the ProductGroup class that represents the Cartesian product
-    class ProductGroup(LieGroup):
+    class ProductGroup(LieGroup[Tuple[G], Tuple[g]]):
         """Lie group representing the Cartesian product of the input groups."""
         
         # Total dimension: sum of the dimensions of each group
@@ -182,93 +185,123 @@ def product_groups_factory(*groups):
         AlgebraTypes: list[type] = [g for _, g in type_pairs]
         
         @classmethod
-        def identity(cls) -> tuple:
+        def identity(cls) -> tuple[G]:
             """Return the identity element of the product group."""
             return tuple(g.identity() for g in groups)
         
         @classmethod
-        def compose(cls, X1: tuple, X2: tuple) -> tuple:
+        def compose(cls, X1: tuple[G], X2: tuple[G]) -> tuple[G]:
             """Compose two elements (X1, X2, ..., Xn) of the product group."""
             return tuple(g.compose(x1, x2) for g, (x1, x2) in zip(groups, zip(X1, X2)))
         
         @classmethod
-        def inverse(cls, X: tuple) -> tuple:
+        def inverse(cls, X: tuple[G]) -> tuple[G]:
             """Inverse of an element (X1, X2, ..., Xn) in the product group."""
             return tuple(g.inverse(x) for g, x in zip(groups, X))
         
         @classmethod
-        def exp(cls, v: tuple) -> tuple:
+        def exp(cls, v: tuple[g]) -> tuple[G]:
             """Exponential map for the product group: apply exp to each component."""
             return tuple(g.exp(vi) for g, vi in zip(groups, v))
         
         @classmethod
-        def log(cls, X: tuple) -> tuple:
+        def log(cls, X: tuple[G]) -> tuple[g]:
             """Logarithmic map for the product group: apply log to each component."""
             return tuple(g.log(x) for g, x in zip(groups, X))
         
         @classmethod
-        def hat(cls, v: np.ndarray) -> tuple:
+        def hat(cls, v: F) -> tuple[g]:
             """Apply hat map to each component of v."""
             parts = [v[cumdims[i]:cumdims[i+1]] for i in range(len(groups))]
             return tuple(g.hat(part) for g, part in zip(groups, parts))
         
         @classmethod
-        def vee(cls, v: tuple) -> np.ndarray:
+        def vee(cls, v: tuple[g]) -> F:
             """Apply vee map to each component of v."""
             parts = [g.vee(vi) for g, vi in zip(groups, v)]
             return np.concatenate(parts)
         
         @classmethod
-        def adjoint(cls, X: tuple) -> np.ndarray:
+        def adjoint(cls, X: tuple[G]) -> F:
             """Adjoint map for the product group: apply adjoint to each component."""
             blocks = [g.adjoint(x) for g, x in zip(groups, X)]
-            return scipy.linalg.block_diag(*blocks)
+            return block_diag(*blocks).astype(np.float64)
         
 
         @classmethod
-        def left_jacobian(cls, v: np.ndarray) -> np.ndarray:
+        def left_jacobian(cls, v: F) -> F:
             parts = [v[cumdims[i]:cumdims[i+1]] for i in range(len(groups))]
             blocks = [g.left_jacobian(v) for g, v in zip(groups, parts)]
-            return scipy.linalg.block_diag(*blocks)
+            return block_diag(*blocks)
             
 
         @classmethod
-        def left_jacobian_inverse(cls, v: np.ndarray) -> np.ndarray:
+        def left_jacobian_inverse(cls, v: F) -> F:
             parts = [v[cumdims[i]:cumdims[i+1]] for i in range(len(groups))]
             blocks = [g.left_jacobian_inverse(v) for g, v in zip(groups, parts)]
-            return scipy.linalg.block_diag(*blocks)
+            return block_diag(*blocks)
         
         @classmethod
-        def lie_bracket(cls, v: np.ndarray, w: np.ndarray) -> np.ndarray:
+        def lie_bracket(cls, v: F, w: F) -> F:
                 parts_v = [v[cumdims[i]:cumdims[i+1]] for i in range(len(groups))]
                 parts_w = [w[cumdims[i]:cumdims[i+1]] for i in range(len(groups))]
                 parts_bracket = [g.lie_bracket(vi, wi) for g, vi, wi in zip(groups, parts_v, parts_w)]
                 return np.concatenate(parts_bracket)
         
         @classmethod
-        def randu(cls):
+        def randu(cls) -> tuple[G]:
             """Uniform random sampling for the product Lie group."""
             # Generate random elements by calling randu for each group in the product
             return tuple(g.randu() for g in groups)
         
         @classmethod
-        def normalize(cls, X: tuple) -> tuple:
+        def normalize(cls, X: tuple[G]) -> tuple[G]:
             """Normalize each element of the product group separately."""
             return tuple(g.normalize(x) for g, x in zip(groups, X))
-
 
     # Set the custom name for the class
     ProductGroup.__name__ = class_name
     return ProductGroup
 
 
+def robot_factor_se2(types: str):
+    class Joint():
+        @abstractmethod
+        def get_exp(self, theta):
+            pass
+        
+    class RevoluteJoint(Joint):
+        def __init__(self):
+            self.theta = 0.0
+            self.S = np.array([1.0, 0.0, 0.0])
+        def get_exp(self, theta):
+            return SE2.Exp(theta * self.S)
+        
+
+    class PrismaticJoint():
+        def __init__(self, vx, vy):
+            norm = np.sqrt(vx, vy)
+            vx /= norm
+            vy /= norm
+            self.theta = 0.0
+            self.S = np.array([0.0, vx, vy])
+        def get_exp(self, theta):
+            return SE2.Exp(theta * self.S)
+    
+    class Robot():
+        for c in types:
+            if c == ord('R'):
+                joint = RevoluteJoint()
+            elif c == ord('P'):
+                joint = PrismaticJoint()
+                
 
 class RAdd(LieGroup[np.float64, np.float64]):
     N: int = 1
     
     @classmethod
     def identity(cls) -> np.float64:
-        return 0
+        return np.float64(0.0)
 
     @classmethod
     def compose(cls, x1: np.float64, x2: np.float64) -> np.float64:
@@ -279,11 +312,11 @@ class RAdd(LieGroup[np.float64, np.float64]):
         return -x
 
     @classmethod
-    def hat(cls, v: np.ndarray) -> np.float64:
-        return v[0]
+    def hat(cls, v: F) -> np.float64:
+        return np.float64(v[0])
 
     @classmethod
-    def vee(cls, vx: np.float64) -> np.ndarray:
+    def vee(cls, vx: np.float64) -> F:
         return np.array([vx])
 
     @classmethod
@@ -295,24 +328,24 @@ class RAdd(LieGroup[np.float64, np.float64]):
         return x
 
     @classmethod
-    def adjoint(cls, x: np.float64) -> np.ndarray:
+    def adjoint(cls, x: np.float64) -> F:
         return np.eye(1)
 
     @classmethod
-    def left_jacobian(cls, v: np.ndarray) -> np.ndarray:
+    def left_jacobian(cls, v: F) -> F:
         return np.eye(1)
 
     @classmethod
-    def left_jacobian_inverse(cls, v: np.ndarray) -> np.ndarray:
+    def left_jacobian_inverse(cls, v: F) -> F:
         return np.eye(1)
 
     @classmethod
-    def lie_bracket(cls, v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
+    def lie_bracket(cls, v1: F, v2: F) -> F:
         return np.array([0])
 
     @classmethod
     def randu(cls) -> np.float64:
-        return np.random.uniform(0, 1)
+        return np.float64(np.random.uniform(0, 1))
 
     @classmethod
     def normalize(cls, x: np.float64) -> np.float64:
@@ -324,7 +357,7 @@ class RplusMul(LieGroup[np.float64, np.float64]):
 
     @classmethod
     def identity(cls) -> np.float64:
-        return 1
+        return np.float64(1.0)
 
     @classmethod
     def compose(cls, x1: np.float64, x2: np.float64) -> np.float64:
@@ -335,40 +368,40 @@ class RplusMul(LieGroup[np.float64, np.float64]):
         return 1 / x
 
     @classmethod
-    def hat(cls, v: np.ndarray) -> np.float64:
-        return v[0]
+    def hat(cls, v: F) -> np.float64:
+        return np.float64(v[0])
 
     @classmethod
-    def vee(cls, vx: np.float64) -> np.ndarray:
+    def vee(cls, vx: np.float64) -> F:
         return np.array([vx])
 
     @classmethod
     def exp(cls, vx: np.float64) -> np.float64:
-        return np.exp(vx)
+        return np.float64(np.exp(vx))
 
     @classmethod
     def log(cls, x: np.float64) -> np.float64:
-        return np.log(x)
+        return np.float64(np.log(x))
 
     @classmethod
-    def adjoint(cls, x: np.float64) -> np.ndarray:
+    def adjoint(cls, x: np.float64) -> F:
         return np.eye(1)
 
     @classmethod
-    def left_jacobian(cls, v: np.ndarray) -> np.ndarray:
+    def left_jacobian(cls, v: F) -> F:
         return np.array([[np.exp(v[0])]])
 
     @classmethod
-    def left_jacobian_inverse(cls, v: np.ndarray) -> np.ndarray:
+    def left_jacobian_inverse(cls, v: F) -> F:
         return np.array([[np.exp(-v[0])]])
 
     @classmethod
-    def lie_bracket(cls, v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
+    def lie_bracket(cls, v1: F, v2: F) -> F:
         return np.zeros(1)
 
     @classmethod
     def randu(cls) -> np.float64:
-        return np.random.uniform(0, 1)
+        return np.float64(np.random.uniform(0, 1))
 
     @classmethod
     def normalize(cls, x: np.float64) -> np.float64:
@@ -377,237 +410,235 @@ class RplusMul(LieGroup[np.float64, np.float64]):
 
 
     
-def RnAdd_factory(n: int):
-
+def RnAdd_factory(n: int) -> Type[LieGroup[F, F]]:
     assert n >= 1
-    class RnAdd(LieGroup[np.ndarray, np.ndarray]):
+    class RnAdd(LieGroup[F, F]):
         N: int = n
         
         @classmethod
-        def identity(cls) -> np.ndarray:
+        def identity(cls) -> F:
             return np.zeros(cls.N)
 
         @classmethod
-        def compose(cls, x1: np.ndarray, x2: np.ndarray) -> np.ndarray:
+        def compose(cls, x1: F, x2: F) -> F:
             return x1 + x2
 
         @classmethod
-        def inverse(cls, x: np.ndarray) -> np.ndarray:
+        def inverse(cls, x: F) -> F:
             return -x
 
         @classmethod
-        def hat(cls, v: np.ndarray) -> np.ndarray:
+        def hat(cls, v: F) -> F:
             cls._check_hat_input(v)
             return v
 
         @classmethod
-        def vee(cls, vx: np.ndarray) -> np.ndarray:
+        def vee(cls, vx: F) -> F:
             v = vx
             cls._check_vee_output(v)
             return v
 
         @classmethod
-        def exp(cls, vx: np.ndarray) -> np.ndarray:
+        def exp(cls, vx: F) -> F:
             return vx
 
         @classmethod
-        def log(cls, x: np.ndarray) -> np.ndarray:
+        def log(cls, x: F) -> F:
             return x
 
         @classmethod
-        def adjoint(cls, x: np.ndarray) -> np.ndarray:
+        def adjoint(cls, x: F) -> F:
             return np.eye(cls.N)
 
         @classmethod
-        def left_jacobian(cls, v: np.ndarray) -> np.ndarray:
+        def left_jacobian(cls, v: F) -> F:
             return np.eye(cls.N)
 
         @classmethod
-        def left_jacobian_inverse(cls, v: np.ndarray) -> np.ndarray:
+        def left_jacobian_inverse(cls, v: F) -> F:
             return np.eye(cls.N)
 
         @classmethod
-        def lie_bracket(cls, v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
+        def lie_bracket(cls, v1: F, v2: F) -> F:
             return np.zeros(cls.N)
 
         @classmethod
-        def randu(cls) -> np.ndarray:
+        def randu(cls) -> F:
             return np.random.uniform(0, 1, size=(cls.N,))
 
         @classmethod
-        def normalize(cls, x: np.ndarray) -> np.ndarray:
+        def normalize(cls, x: F) -> F:
             return x
     RnAdd.__name__ = f"R{n}Add"
     return RnAdd
     
     
-    
-class UnitQuat(LieGroup[np.quaternion, np.quaternion]):
+class UnitQuat(LieGroup[quaternion.quaternion, quaternion.quaternion]):
     
     N: int = 3
 
     @classmethod
-    def identity(cls) -> np.quaternion:
-        return np.quaternion(1.0, 0.0, 0.0, 0.0)
+    def identity(cls) -> quaternion.quaternion:
+        return quaternion.quaternion(1.0, 0.0, 0.0, 0.0)
 
     @classmethod
-    def compose(cls, q1: np.quaternion, q2: np.quaternion) -> np.quaternion:
+    def compose(cls, q1: quaternion.quaternion, q2: quaternion.quaternion) -> quaternion.quaternion:
         return q1 * q2
 
     @classmethod
-    def inverse(cls, q: np.quaternion) -> np.quaternion:
+    def inverse(cls, q: quaternion.quaternion) -> quaternion.quaternion:
         return q.conj()
 
     @classmethod
-    def hat(cls, v: np.ndarray) -> np.quaternion:
+    def hat(cls, v: F) -> quaternion.quaternion:
         cls._check_hat_input(v)
-        return np.quaternion(0.0, v[0], v[1], v[2])
+        return quaternion.quaternion(0.0, v[0], v[1], v[2])
         
     @classmethod
-    def vee(cls, vx: np.quaternion) -> np.ndarray:
+    def vee(cls, vx: quaternion.quaternion) -> F:
         v = np.array([vx.x, vx.y, vx.z])
         cls._check_vee_output(v)
         return v
 
     @classmethod
-    def exp(cls, qx: np.quaternion) -> np.quaternion:
+    def exp(cls, qx: quaternion.quaternion) -> quaternion.quaternion:
         v = np.array([qx.x, qx.y, qx.z])
         theta = np.linalg.norm(v)
         if theta < 1e-10:
             return cls.identity()
         axis = v / theta
-        return np.quaternion(np.cos(theta), *(np.sin(theta) * axis))
+        return quaternion.quaternion(np.cos(theta), *(np.sin(theta) * axis))
 
     @classmethod
-    def log(cls, q: np.quaternion) -> np.quaternion:
+    def log(cls, q: quaternion.quaternion) -> quaternion.quaternion:
         v = np.array([q.x, q.y, q.z])
         norm_v = np.linalg.norm(v)
         w = q.w
         if norm_v < 1e-10:
-            return np.quaternion(0.0, 0.0, 0.0, 0.0)
+            return quaternion.quaternion(0.0, 0.0, 0.0, 0.0)
         theta = np.arccos(np.clip(w, -1.0, 1.0))
-        return np.quaternion(0.0, *(theta * v / norm_v))
+        return quaternion.quaternion(0.0, *(theta * v / norm_v))
 
     @classmethod
-    def adjoint(cls, X: np.quaternion) -> np.ndarray:
+    def adjoint(cls, X: quaternion.quaternion) -> F:
         return quaternion.as_rotation_matrix(X)
     
     @classmethod
-    def left_jacobian(cls, v: np.ndarray) -> np.ndarray:
+    def left_jacobian(cls, v: F) -> F:
         theta = np.linalg.norm(v)
         vx = SO3.hat(v)
         if theta < EPS:
-            return np.eye(3) + 0.5 * vx + (1.0/6.0) * (vx @ vx)
-        return np.eye(3) + ((1 - np.cos(theta)) / (theta ** 2)) * vx + ((theta - np.sin(theta)) / (theta ** 3)) * (vx @ vx)
+            return (np.eye(3) + 0.5 * vx + (1.0/6.0) * (vx @ vx)).astype(np.float64)
+        return (np.eye(3) + ((1 - np.cos(theta)) / (theta ** 2)) * vx + ((theta - np.sin(theta)) / (theta ** 3)) * (vx @ vx)).astype(np.float64)
 
     @classmethod
-    def left_jacobian_inverse(cls, v: np.ndarray) -> np.ndarray:
+    def left_jacobian_inverse(cls, v: F) -> F:
         theta = np.linalg.norm(v)
         vx = SO3.hat(v)
         if theta < EPS:
-            return np.eye(3) - 0.5 * vx + (1.0 / 12.0) * (vx @ vx)
-        return np.eye(3) - 0.5 * vx + (1.0 / (theta ** 2) - (1 + np.cos(theta)) / (2 * theta * np.sin(theta))) * (vx @ vx)
+            return (np.eye(3) - 0.5 * vx + (1.0 / 12.0) * (vx @ vx)).astype(np.float64)
+        return (np.eye(3) - 0.5 * vx + (1.0 / (theta ** 2) - (1 + np.cos(theta)) / (2 * theta * np.sin(theta))) * (vx @ vx)).astype(np.float64)
 
     @classmethod
-    def lie_bracket(cls, v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
+    def lie_bracket(cls, v1: F, v2: F) -> F:
         return np.cross(v1, v2)
     
     @classmethod
-    def randu(cls) -> np.quaternion:
+    def randu(cls) -> quaternion.quaternion:
         u1, u2, u3 = np.random.uniform(0, 1, (3,))
         qw = np.sqrt(1 - u1) * np.sin(2 * np.pi * u2)
         qx = np.sqrt(1 - u1) * np.cos(2 * np.pi * u2)
         qy = np.sqrt(u1) * np.sin(2 * np.pi * u3)
         qz = np.sqrt(u1) * np.cos(2 * np.pi * u3)
-        return np.quaternion(qw, qx, qy, qz)
+        return quaternion.quaternion(qw, qx, qy, qz)
     
     @classmethod
-    def normalize(cls, q: np.quaternion) -> np.quaternion:
+    def normalize(cls, q: quaternion.quaternion) -> quaternion.quaternion:
         return q / np.abs(q)
 
 
 
     
-class U1(LieGroup[np.complex128, np.float64]):
+class U1(LieGroup[np.complex128, np.complex128]):
     N: int = 1
 
     @classmethod
     def identity(cls) -> np.complex128:
-        return 1.0 + 0.0j
+        return np.complex128(1.0 + 0.0j)
 
     @classmethod
     def compose(cls, z1: np.complex128, z2: np.complex128) -> np.complex128:
-        return z1 * z2
+        return np.complex128(z1 * z2)
 
     @classmethod
     def inverse(cls, z: np.complex128) -> np.complex128:
-        return np.conj(z)
+        return np.complex128(np.conj(z))
 
     @classmethod
-    def hat(cls, w: np.ndarray) -> np.complex128:
+    def hat(cls, w: F) -> np.complex128:
         cls._check_hat_input(w)
-        return 1j * w[0]
+        return np.complex128(1j * w[0])
 
     @classmethod
-    def vee(cls, wx: np.complex128) -> np.ndarray:
+    def vee(cls, wx: np.complex128) -> F:
         v = np.array([np.imag(wx)])
         cls._check_vee_output(v)
         return v
 
     @classmethod
     def exp(cls, wx: np.complex128) -> np.complex128:
-        return np.exp(wx)
+        return np.complex128(np.exp(wx))
 
     @classmethod
     def log(cls, z: np.complex128) -> np.complex128:
-        return np.angle(z) * 1j
+        return np.complex128(np.angle(z) * 1j)
 
     @classmethod
-    def adjoint(cls, z: np.complex128) -> np.ndarray:
+    def adjoint(cls, z: np.complex128) -> F:
         return np.eye(1)
 
     @classmethod
-    def left_jacobian(cls, w: np.ndarray) -> np.ndarray:
+    def left_jacobian(cls, w: F) -> F:
         return np.eye(1)
 
     @classmethod
-    def left_jacobian_inverse(cls, w: np.ndarray) -> np.ndarray:
+    def left_jacobian_inverse(cls, w: F) -> F:
         return np.eye(1)
 
     @classmethod
-    def lie_bracket(cls, w1: np.ndarray, w2: np.ndarray) -> np.ndarray:
+    def lie_bracket(cls, w1: F, w2: F) -> F:
         return np.zeros(1)
     
     @classmethod
     def randu(cls) -> np.complex128:
         angle = np.random.uniform(-np.pi, np.pi)
-        return np.exp(1j * angle)
+        return np.complex128(np.exp(1j * angle))
     @classmethod
     
     def normalize(cls, z: np.complex128) -> np.complex128:
-        return z / np.abs(z)
+        return np.complex128(z / np.abs(z))
 
 
-class SE2(LieGroup[np.ndarray, np.ndarray]):
+class SE2(LieGroup[F, F]):
     N: int = 3
     
     @classmethod
-    def identity(cls) -> np.ndarray:
+    def identity(cls) -> F:
         return np.eye(3)
 
     @classmethod
-    def compose(cls, T1: np.ndarray, T2: np.ndarray) -> np.ndarray:
+    def compose(cls, T1: F, T2: F) -> F:
         return T1 @ T2
 
     @classmethod
-    def inverse(cls, T: np.ndarray) -> np.ndarray:
+    def inverse(cls, T: F) -> F:
         return np.vstack([
             np.hstack([T[:2, :2].T, -T[:2, :2].T @ T[:2, 2:3]]),
             np.array([[0, 0, 1]])
         ])
 
     @classmethod
-    def hat(cls, V: np.ndarray) -> np.ndarray:
+    def hat(cls, V: F) -> F:
         cls._check_hat_input(V)
         w = V[:1]
         v = V[1:]
@@ -618,13 +649,13 @@ class SE2(LieGroup[np.ndarray, np.ndarray]):
         ])
 
     @classmethod
-    def vee(cls, Vx: np.ndarray) -> np.ndarray:
+    def vee(cls, Vx: F) -> F:
         V = np.array([Vx[1, 0], Vx[0, 2], Vx[1, 2]])
         cls._check_vee_output(V)
         return V
 
     @classmethod
-    def log(cls, T: np.ndarray) -> np.ndarray:
+    def log(cls, T: F) -> F:
         R = T[:2, :2]
         p = T[:2, 2]
         theta = np.arctan2(R[1, 0], R[0, 0])
@@ -638,7 +669,7 @@ class SE2(LieGroup[np.ndarray, np.ndarray]):
         return cls.hat(np.array([theta, *v]))
 
     @classmethod
-    def exp(cls, Vx: np.ndarray) -> np.ndarray:
+    def exp(cls, Vx: F) -> F:
         w, vx, vy = cls.vee(Vx)
         v = np.array([[vx, vy]]).T
         if np.abs(w) > EPS:
@@ -664,7 +695,7 @@ class SE2(LieGroup[np.ndarray, np.ndarray]):
             ])
 
     @classmethod
-    def adjoint(cls, T: np.ndarray) -> np.ndarray:
+    def adjoint(cls, T: F) -> F:
         return np.vstack([
             np.array([[1, 0, 0]]),
             np.hstack([np.array([[T[1, 2], -T[0, 2]]]).T, T[:2, :2]])
@@ -672,7 +703,7 @@ class SE2(LieGroup[np.ndarray, np.ndarray]):
         
     
     @classmethod
-    def left_jacobian(cls, V: np.ndarray) -> np.ndarray:
+    def left_jacobian(cls, V: F) -> F:
         theta = V[0]
         if np.abs(theta) < EPS:
             return np.eye(3)
@@ -685,7 +716,7 @@ class SE2(LieGroup[np.ndarray, np.ndarray]):
         ])
 
     @classmethod
-    def left_jacobian_inverse(cls, V: np.ndarray) -> np.ndarray:
+    def left_jacobian_inverse(cls, V: F) -> F:
         theta = V[0]
         if np.abs(theta) < EPS:
             return np.eye(3)
@@ -700,32 +731,26 @@ class SE2(LieGroup[np.ndarray, np.ndarray]):
         ])
         
     @classmethod
-    def lie_bracket(cls, V1: np.ndarray, V2: np.ndarray) -> np.ndarray:
+    def lie_bracket(cls, V1: F, V2: F) -> F:
         V1x = cls.hat(V1)
         V2x = cls.hat(V2)
         return cls.vee(V1x @ V2x - V2x @ V1x)
     
     @classmethod
-    def normalize(cls, T: np.ndarray) -> np.ndarray:
+    def normalize(cls, T: F) -> F:
         U, _, Vt = np.linalg.svd(T[:2, :2])
         R = U @ Vt
         T[:2, :2] = R
         return T
     
     @classmethod
-    def randu(cls, bounds: tuple=None) -> np.ndarray:
+    def randu(cls, bounds: tuple[tuple[np.float64, np.float64], tuple[np.float64, np.float64]]=((np.float64(0.0), np.float64(1.0)), (np.float64(0.0), np.float64(1.0)))) -> F:
         theta = np.random.uniform(-np.pi, np.pi)
-        if bounds is None:
-            xmin, xmax = 0.0, 1.0
-            ymin, ymax = 0.0, 1.0
-        else:
-            if (not isinstance(bounds, tuple) or 
-                len(bounds) != 2 or 
-                not all(isinstance(b, tuple) and len(b) == 2 for b in bounds)):
-                raise TypeError(
-                    f"Bounds must be a tuple of two (min, max) tuples, e.g., ((xmin, xmax), (ymin, ymax)), got {bounds}"
-                )
-            (xmin, xmax), (ymin, ymax) = bounds
+        if (not isinstance(bounds, tuple) or len(bounds) != 2 or not all(isinstance(b, tuple) and len(b) == 2 for b in bounds)):
+            raise TypeError(
+                f"Bounds must be a tuple of two (min, max) tuples, e.g., ((xmin, xmax), (ymin, ymax)), got {bounds}"
+            )
+        (xmin, xmax), (ymin, ymax) = bounds
         x = np.random.uniform(xmin, xmax)
         y = np.random.uniform(ymin, ymax)
 
@@ -740,19 +765,19 @@ class SE2(LieGroup[np.ndarray, np.ndarray]):
         T[:2, 2:3] = p
         return T
     
-class SE3(LieGroup[np.ndarray, np.ndarray]):
+class SE3(LieGroup[F, F]):
     N: int = 6
     
     @classmethod
-    def identity(cls) -> np.ndarray:
+    def identity(cls) -> F:
         return np.eye(4)
 
     @classmethod
-    def compose(cls, T1: np.ndarray, T2: np.ndarray) -> np.ndarray:
+    def compose(cls, T1: F, T2: F) -> F:
         return T1 @ T2
 
     @classmethod
-    def inverse(cls, T: np.ndarray) -> np.ndarray:
+    def inverse(cls, T: F) -> F:
         T_inv = np.vstack([
             np.hstack([T[:3, :3].T, -T[:3, :3].T @ T[:3, 3:4]]),
             np.array([[0, 0, 0, 1]])
@@ -760,7 +785,7 @@ class SE3(LieGroup[np.ndarray, np.ndarray]):
         return T_inv
 
     @classmethod
-    def hat(cls, V: np.ndarray) -> np.ndarray:
+    def hat(cls, V: F) -> F:
         cls._check_hat_input(V)
         w = V[:3]
         v = V[3:]
@@ -772,13 +797,13 @@ class SE3(LieGroup[np.ndarray, np.ndarray]):
         return Vx
 
     @classmethod
-    def vee(cls, Vx: np.ndarray) -> np.ndarray:
+    def vee(cls, Vx: F) -> F:
         V = np.array([Vx[2, 1], Vx[0, 2], Vx[1, 0], Vx[0, 3], Vx[1, 3], Vx[2, 3]])
         cls._check_vee_output(V)
         return V
     
     @classmethod
-    def exp(cls, Vx: np.ndarray) -> np.ndarray:
+    def exp(cls, Vx: F) -> F:
         w = np.array([
             Vx[2, 1],
             Vx[0, 2],
@@ -810,7 +835,7 @@ class SE3(LieGroup[np.ndarray, np.ndarray]):
         return T
 
     @classmethod
-    def log(cls, T: np.ndarray) -> np.ndarray:
+    def log(cls, T: F) -> F:
         R = T[:3, :3]
         p = T[:3, 3]
         
@@ -825,7 +850,6 @@ class SE3(LieGroup[np.ndarray, np.ndarray]):
             wx = (theta / (2 * np.sin(theta))) * (R - R.T)
             w = np.array([wx[2, 1], wx[0, 2], wx[1, 0]])
             w_norm_sq = np.dot(w, w)
-            print(w_norm_sq)
             A = np.sin(theta) / theta
             B = (1 - np.cos(theta)) / (theta**2)
             V_inv = (
@@ -842,7 +866,7 @@ class SE3(LieGroup[np.ndarray, np.ndarray]):
         return V
 
     @classmethod
-    def left_jacobian(cls, V: np.ndarray) -> np.ndarray:
+    def left_jacobian(cls, V: F) -> F:
         w = V[:3]
         v = V[3:]
         theta = np.linalg.norm(w)
@@ -871,7 +895,7 @@ class SE3(LieGroup[np.ndarray, np.ndarray]):
         return JV
 
     @classmethod
-    def left_jacobian_inverse(cls, V: np.ndarray) -> np.ndarray:
+    def left_jacobian_inverse(cls, V: F) -> F:
         w = V[:3]
         v = V[3:]
         theta = np.linalg.norm(w)
@@ -905,7 +929,7 @@ class SE3(LieGroup[np.ndarray, np.ndarray]):
         return JV_inv
         
     @classmethod
-    def lie_bracket(cls, V1: np.ndarray, V2: np.ndarray) -> np.ndarray:
+    def lie_bracket(cls, V1: F, V2: F) -> F:
         V1_w = V1[:3]
         V1_v = V1[3:]
 
@@ -918,7 +942,7 @@ class SE3(LieGroup[np.ndarray, np.ndarray]):
         return np.hstack([w_cross, v_cross])
 
     @classmethod
-    def normalize(cls, T: np.ndarray) -> np.ndarray:
+    def normalize(cls, T: F) -> F:
         U, _, Vt = np.linalg.svd(T[:3, :3])
         R = U @ Vt
         if np.linalg.det(R) < 0:
@@ -927,31 +951,24 @@ class SE3(LieGroup[np.ndarray, np.ndarray]):
         return T
 
     @classmethod
-    def randu(cls, bounds: tuple = None) -> np.ndarray:
+    def randu(cls, bounds: tuple[tuple[np.float64, np.float64], tuple[np.float64, np.float64], tuple[np.float64, np.float64]]=((np.float64(0.0), np.float64(1.0)), (np.float64(0.0), np.float64(1.0)), (np.float64(0.0), np.float64(1.0)))) -> F:
         theta = np.random.uniform(-np.pi, np.pi)
         axis = np.random.randn(3)
         axis /= np.linalg.norm(axis)
         w = axis * theta
-
-        if bounds is None:
-            xmin, xmax = 0.0, 1.0
-            ymin, ymax = 0.0, 1.0
-            zmin, zmax = 0.0, 1.0
-        else:
-            if (not isinstance(bounds, tuple) or 
-                len(bounds) != 3 or 
-                not all(isinstance(b, tuple) and len(b) == 2 for b in bounds)):
-                raise TypeError(
-                    f"bounds must be a tuple of three (min, max) tuples, e.g., ((xmin, xmax), (ymin, ymax), (zmin, zmax)), got {bounds}"
-                )
-            (xmin, xmax), (ymin, ymax), (zmin, zmax) = bounds
+        if (not isinstance(bounds, tuple) or 
+            len(bounds) != 3 or 
+            not all(isinstance(b, tuple) and len(b) == 2 for b in bounds)):
+            raise TypeError(
+                f"bounds must be a tuple of three (min, max) tuples, e.g., ((xmin, xmax), (ymin, ymax), (zmin, zmax)), got {bounds}"
+            )
+        (xmin, xmax), (ymin, ymax), (zmin, zmax) = bounds
 
         x = np.random.uniform(xmin, xmax)
         y = np.random.uniform(ymin, ymax)
         z = np.random.uniform(zmin, zmax)
 
         wx = SO3.hat(w)
-        theta = np.linalg.norm(w)
         if theta < EPS:
             R = np.eye(3)
         else:
@@ -967,7 +984,7 @@ class SE3(LieGroup[np.ndarray, np.ndarray]):
         return T
     
     @classmethod
-    def adjoint(cls, T: np.ndarray) -> np.ndarray:
+    def adjoint(cls, T: F) -> F:
         R = T[:3, :3]
         p = T[:3, 3]
 
@@ -981,23 +998,23 @@ class SE3(LieGroup[np.ndarray, np.ndarray]):
 
 
 
-class SO2(LieGroup[np.ndarray, np.ndarray]):
+class SO2(LieGroup[F, F]):
     N: int = 1
 
     @classmethod
-    def identity(cls) -> np.ndarray:
+    def identity(cls) -> F:
         return np.eye(2)
 
     @classmethod
-    def compose(cls, R1: np.ndarray, R2: np.ndarray) -> np.ndarray:
+    def compose(cls, R1: F, R2: F) -> F:
         return R1 @ R2
 
     @classmethod
-    def inverse(cls, R: np.ndarray) -> np.ndarray:
+    def inverse(cls, R: F) -> F:
         return R.T
 
     @classmethod
-    def hat(cls, w: np.ndarray) -> np.ndarray:
+    def hat(cls, w: F) -> F:
         cls._check_hat_input(w)
         return np.array([
             [   0, -w[0]],
@@ -1005,18 +1022,18 @@ class SO2(LieGroup[np.ndarray, np.ndarray]):
         ])
 
     @classmethod
-    def vee(cls, wx: np.ndarray) -> np.ndarray:
+    def vee(cls, wx: F) -> F:
         w = np.array([wx[1, 0]])
         cls._check_vee_output(w)
         return w
 
     @classmethod
-    def log(cls, R: np.ndarray) -> np.ndarray:
+    def log(cls, R: F) -> F:
         theta = np.arctan2(R[1, 0], R[0, 0])
         return cls.hat(np.array([theta]))
 
     @classmethod
-    def exp(cls, wx: np.ndarray) -> np.ndarray:
+    def exp(cls, wx: F) -> F:
         w = cls.vee(wx)
         theta = w[0]
         R = np.array([
@@ -1026,29 +1043,29 @@ class SO2(LieGroup[np.ndarray, np.ndarray]):
         return R
 
     @classmethod
-    def adjoint(cls, R: np.ndarray) -> np.ndarray:
+    def adjoint(cls, R: F) -> F:
         return np.eye(1)
     
     @classmethod
-    def left_jacobian(cls, w: np.ndarray) -> np.ndarray:
+    def left_jacobian(cls, w: F) -> F:
         theta = w[0]
         if np.abs(theta) < EPS:
             return np.eye(1)
         return np.array([[np.sin(theta) / theta]])
 
     @classmethod
-    def left_jacobian_inverse(cls, w: np.ndarray) -> np.ndarray:
+    def left_jacobian_inverse(cls, w: F) -> F:
         theta = w[0]
         if np.abs(theta) < EPS:
             return np.eye(1)
         return np.array([[theta / np.sin(theta)]])
     
     @classmethod
-    def lie_bracket(cls, w1: np.ndarray, w2: np.ndarray) -> np.ndarray:
+    def lie_bracket(cls, w1: F, w2: F) -> F:
         return np.zeros(1)
     
     @classmethod
-    def randu(cls) -> np.ndarray:
+    def randu(cls) -> F:
         theta = np.random.uniform(-np.pi, np.pi)
         return np.array([
             [np.cos(theta), -np.sin(theta)],
@@ -1057,23 +1074,23 @@ class SO2(LieGroup[np.ndarray, np.ndarray]):
 
 
 
-class SO3(LieGroup[np.ndarray, np.ndarray]):
+class SO3(LieGroup[F, F]):
     N: int = 3
     
     @classmethod
-    def identity(cls) -> np.ndarray:
+    def identity(cls) -> F:
         return np.eye(3)
 
     @classmethod
-    def compose(cls, R1: np.ndarray, R2: np.ndarray) -> np.ndarray:
+    def compose(cls, R1: F, R2: F) -> F:
         return R1 @ R2
 
     @classmethod
-    def inverse(cls, R: np.ndarray) -> np.ndarray:
+    def inverse(cls, R: F) -> F:
         return R.T
 
     @classmethod
-    def hat(cls, w: np.ndarray) -> np.ndarray:
+    def hat(cls, w: F) -> F:
         cls._check_hat_input(w)
         return np.array([
             [    0, -w[2],  w[1]],
@@ -1082,13 +1099,13 @@ class SO3(LieGroup[np.ndarray, np.ndarray]):
         ])
 
     @classmethod
-    def vee(cls, wx: np.ndarray) -> np.ndarray:
+    def vee(cls, wx: F) -> F:
         w = np.array([wx[2, 1], wx[0, 2], wx[1, 0]])
         cls._check_vee_output(w)
         return w
 
     @classmethod
-    def log(cls, R: np.ndarray) -> np.ndarray:
+    def log(cls, R: F) -> F:
         cos_theta = (np.trace(R) - 1) / 2
         cos_theta = np.clip(cos_theta, -1.0, 1.0)
         theta = np.arccos(cos_theta)
@@ -1098,59 +1115,54 @@ class SO3(LieGroup[np.ndarray, np.ndarray]):
         return wx
 
     @classmethod
-    def exp(cls, wx: np.ndarray) -> np.ndarray:
+    def exp(cls, wx: F) -> F:
         w = cls.vee(wx)
         theta = np.linalg.norm(w)
         if theta < 1e-10:
-            return np.eye(3)
+            return np.eye(3).astype(np.float64)
         else:
             wn = w / theta
             wxn = cls.hat(wn)
-            return np.eye(3) + np.sin(theta) * wxn + (1 - np.cos(theta)) * (wxn @ wxn)
+            return (np.eye(3) + np.sin(theta) * wxn + (1 - np.cos(theta)) * (wxn @ wxn)).astype(np.float64)
 
     @classmethod
-    def adjoint(cls, R: np.ndarray) -> np.ndarray:
+    def adjoint(cls, R: F) -> F:
         return R
     
     @classmethod
-    def left_jacobian(cls, w: np.ndarray) -> np.ndarray:
+    def left_jacobian(cls, w: F) -> F:
         theta = np.linalg.norm(w)
         wx = cls.hat(w)
         if theta < EPS:
             return np.eye(3) + 0.5 * wx + (1.0 / 6.0) * (wx @ wx)
-        return np.eye(3) + ((1 - np.cos(theta)) / (theta ** 2)) * wx + ((theta - np.sin(theta)) / (theta ** 3)) * (wx @ wx)
+        return (np.eye(3) + ((1 - np.cos(theta)) / (theta ** 2)) * wx + ((theta - np.sin(theta)) / (theta ** 3)) * (wx @ wx)).astype(np.float64)
 
     @classmethod
-    def left_jacobian_inverse(cls, w: np.ndarray) -> np.ndarray:
+    def left_jacobian_inverse(cls, w: F) -> F:
         theta = np.linalg.norm(w)
         wx = cls.hat(w)
         if theta < EPS:
             return np.eye(3) - 0.5 * wx + (1.0 / 12.0) * (wx @ wx)
-        return np.eye(3) - 0.5 * wx + (1.0 / (theta ** 2) - (1 + np.cos(theta)) / (2 * theta * np.sin(theta))) * (wx @ wx)
+        return (np.eye(3) - 0.5 * wx + (1.0 / (theta ** 2) - (1 + np.cos(theta)) / (2 * theta * np.sin(theta))) * (wx @ wx)).astype(np.float64)
     
     @classmethod
-    def lie_bracket(cls, w1: np.ndarray, w2: np.ndarray) -> np.ndarray:
+    def lie_bracket(cls, w1: F, w2: F) -> F:
         w1x = cls.hat(w1)
         w2x = cls.hat(w2)
         return cls.vee(w1x @ w2x - w2x @ w1x)
     
     
     @classmethod
-    def randu(cls) -> np.ndarray:
+    def randu(cls) -> F:
         u1, u2, u3 = np.random.uniform(0, 1, (3,))
         qw = np.sqrt(1 - u1) * np.sin(2 * np.pi * u2)
         qx = np.sqrt(1 - u1) * np.cos(2 * np.pi * u2)
         qy = np.sqrt(u1) * np.sin(2 * np.pi * u3)
         qz = np.sqrt(u1) * np.cos(2 * np.pi * u3)
-        q = np.quaternion(qw, qx, qy, qz)
+        q = quaternion.quaternion(qw, qx, qy, qz)
         return quaternion.as_rotation_matrix(q)
         
     @classmethod
-    def normalize(cls, R: np.ndarray) -> np.ndarray:
+    def normalize(cls, R: F) -> F:
         U, _, Vt = np.linalg.svd(R)
-        return U @ Vt
-
-
-
-    
-    
+        return (U @ Vt).astype(np.float64)

@@ -130,7 +130,6 @@ Trajectory plotting included for 2D, 3D, and rotational groups.
 ## Future Plans
 
 - Add support for **Torus groups** (S¹ × S¹)
-- Add **SE(n)** and **SO(n)** for arbitrary dimensions
 - Stochastic differential equation (SDE) integration on manifolds
 - Batch optimization and factor graph support
 
